@@ -1,3 +1,10 @@
-# WebSocket URL routing for Django Channels
+"""
+WebSocket URL routing for the signals_app.
+"""
 
-websocket_urlpatterns = []
+from django.urls import re_path
+from . import consumers
+
+websocket_urlpatterns = [
+    re_path(r"ws/orders", consumers.OrderConsumer.as_asgi()),
+]
