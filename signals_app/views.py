@@ -171,6 +171,26 @@ def list_orders(request):
 @api_view(["GET"])
 @authentication_classes([APIKeyAuthentication])
 @permission_classes([IsAuthenticated])
+def get_analytics(request):
+    """
+    Calculate simple trading stats (count of trades by instrument).
+    """
+    user_orders = Order.objects.filter(user=request.user)
+    total_trades = user_orders.count()
+    
+    # Group by instrument
+    from django.db.models import Count
+    by_instrument = user_orders.values("instrument").annotate(count=Count("id"))
+
+    return Response({
+        "total_trades": total_trades,
+        "by_instrument": list(by_instrument),
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([APIKeyAuthentication])
+@permission_classes([IsAuthenticated])
 def get_order(request, order_id):
     """Get details of a single order by ID."""
     try:

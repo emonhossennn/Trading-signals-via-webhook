@@ -18,4 +18,7 @@ urlpatterns = [
     # Orders
     path("orders", views.list_orders, name="list-orders"),
     path("orders/<uuid:order_id>", views.get_order, name="get-order"),
+    
+    # Analytics
+    path("analytics", views.get_analytics, name="get-analytics"),
 ]
