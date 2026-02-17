@@ -119,7 +119,8 @@ def _broadcast_order_update(order, event_type: str):
             logger.warning("No channel layer configured — skipping broadcast")
             return
 
-        group_name = f"orders_{order.user_id}"
+        # Broadcast to the global 'orders_updates' group (simple dashboard approach)
+        group_name = "orders_updates"
         message = {
             "type": "order_update",
             "data": {
@@ -131,6 +132,7 @@ def _broadcast_order_update(order, event_type: str):
                 "entry_price": str(order.entry_price) if order.entry_price else None,
                 "stop_loss": str(order.stop_loss),
                 "take_profit": str(order.take_profit),
+                "user": order.user.username,
             },
         }
 
