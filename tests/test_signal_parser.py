@@ -37,6 +37,13 @@ class SignalParserValidSignalsTest(TestCase):
         self.assertAlmostEqual(signal.stop_loss, 1900.50)
         self.assertAlmostEqual(signal.take_profit, 1950.00)
 
+    def test_buy_with_bracketed_entry_price(self):
+        """[@price] form (as shown in the spec) should parse identically to @price."""
+        raw = "BUY EURUSD [@1.0860]\nSL 1.0850\nTP 1.0890"
+        signal = parse_signal(raw)
+        self.assertEqual(signal.action, "BUY")
+        self.assertAlmostEqual(signal.entry_price, 1.0860)
+
     def test_case_insensitive_action(self):
         raw = "buy eurusd\n\nsl 1.0850\ntp 1.0890"
         signal = parse_signal(raw)
@@ -84,5 +91,11 @@ class SignalParserInvalidSignalsTest(TestCase):
 
     def test_too_few_lines(self):
         raw = "BUY EURUSD"
+        with self.assertRaises(SignalValidationError):
+            parse_signal(raw)
+
+    def test_mismatched_bracket_rejected(self):
+        """[@price without closing bracket must not silently pass."""
+        raw = "BUY EURUSD [@1.0860\nSL 1.0850\nTP 1.0890"
         with self.assertRaises(SignalValidationError):
             parse_signal(raw)

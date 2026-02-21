@@ -1,9 +1,8 @@
 """
-Order manager.
+Order manager — order creation, broker execution, lifecycle simulation.
 
-Handles order creation, mock broker execution, and lifecycle simulation.
-Uses threading to simulate background status transitions without
-requiring Celery or an external task queue.
+Uses a plain daemon thread to drive status transitions so we don't need
+Celery or any external task queue for this service.
 """
 
 import logging
@@ -21,13 +20,12 @@ logger = logging.getLogger(__name__)
 
 def create_and_process_order(user, broker_account, signal: ParsedSignal) -> Order:
     """
-    Create an order from a parsed signal, execute on mock broker,
-    and start the lifecycle simulation in a background thread.
-    """
-    # Execute on mock broker first
-    result = execute_trade(signal, user, broker_account)
+    Persist an order, hand it off to the mock broker, then kick off the
+    background lifecycle thread.
 
-    # Create the order record
+    The row is written as 'pending' before the broker call so there is
+    always an audit trail even when execution fails.
+    """
     order = Order.objects.create(
         user=user,
         broker_account=broker_account,
@@ -37,17 +35,27 @@ def create_and_process_order(user, broker_account, signal: ParsedSignal) -> Orde
         stop_loss=Decimal(str(signal.stop_loss)),
         take_profit=Decimal(str(signal.take_profit)),
         status="pending",
-        fake_order_id=result.order_id,
+        fake_order_id="",
     )
 
     log_activity(user, "order_created", {
         "order_id": str(order.id),
         "action": signal.action,
         "instrument": signal.instrument,
-        "fake_order_id": result.order_id,
     })
 
-    # Kick off lifecycle simulation in a background thread
+    try:
+        result = execute_trade(signal, user, broker_account)
+        order.fake_order_id = result.order_id
+        order.save(update_fields=["fake_order_id", "updated_at"])
+        log_activity(user, "order_submitted", {
+            "order_id": str(order.id),
+            "fake_order_id": result.order_id,
+        })
+    except Exception as exc:
+        logger.error("Broker execution failed for order %s: %s", order.id, exc)
+        return order
+
     thread = threading.Thread(
         target=_simulate_order_lifecycle,
         args=(str(order.id), user.id),
@@ -60,14 +68,9 @@ def create_and_process_order(user, broker_account, signal: ParsedSignal) -> Orde
 
 def _simulate_order_lifecycle(order_id: str, user_id: int):
     """
-    Simulate the order lifecycle in the background:
-      pending → (5s) → executed → (10s) → closed
-
-    Each status change is broadcast via the WebSocket channel layer.
+    Background thread: pending -> executed (after 5 s) -> closed (after 10 s).
+    Each transition is broadcast to the user's WebSocket group.
     """
-    import django
-    django.setup()
-
     from .models import Order
     from .activity_log import log_activity
     from django.contrib.auth.models import User
@@ -75,52 +78,38 @@ def _simulate_order_lifecycle(order_id: str, user_id: int):
     try:
         user = User.objects.get(id=user_id)
 
-        # Wait 5 seconds, then mark as executed
         time.sleep(5)
         order = Order.objects.get(id=order_id)
         order.status = "executed"
         order.save(update_fields=["status", "updated_at"])
-
-        log_activity(user, "order_executed", {
-            "order_id": order_id,
-            "instrument": order.instrument,
-        })
+        log_activity(user, "order_executed", {"order_id": order_id, "instrument": order.instrument})
         _broadcast_order_update(order, "order.executed")
-        logger.info(f"Order {order_id} → executed")
+        logger.info("Order %s -> executed", order_id)
 
-        # Wait 10 more seconds, then mark as closed
         time.sleep(10)
         order.refresh_from_db()
         order.status = "closed"
         order.save(update_fields=["status", "updated_at"])
-
-        log_activity(user, "order_closed", {
-            "order_id": order_id,
-            "instrument": order.instrument,
-        })
+        log_activity(user, "order_closed", {"order_id": order_id, "instrument": order.instrument})
         _broadcast_order_update(order, "order.closed")
-        logger.info(f"Order {order_id} → closed")
+        logger.info("Order %s -> closed", order_id)
 
-    except Exception as e:
-        logger.error(f"Error in order lifecycle simulation for {order_id}: {e}")
+    except Exception as exc:
+        logger.error("Lifecycle simulation failed for order %s: %s", order_id, exc)
 
 
 def _broadcast_order_update(order, event_type: str):
-    """
-    Send an order status update to connected WebSocket clients
-    via Django Channels' channel layer.
-    """
+    """Push an order status change to the user's WebSocket group."""
     try:
         from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
 
         channel_layer = get_channel_layer()
         if channel_layer is None:
-            logger.warning("No channel layer configured — skipping broadcast")
+            logger.warning("No channel layer configured, skipping broadcast")
             return
 
-        # Broadcast to the global 'orders_updates' group (simple dashboard approach)
-        group_name = "orders_updates"
+        group_name = f"orders_user_{order.user_id}"
         message = {
             "type": "order_update",
             "data": {
@@ -137,7 +126,7 @@ def _broadcast_order_update(order, event_type: str):
         }
 
         async_to_sync(channel_layer.group_send)(group_name, message)
-        logger.info(f"Broadcast {event_type} for order {order.id}")
+        logger.info("Broadcast %s for order %s", event_type, order.id)
 
-    except Exception as e:
-        logger.warning(f"Failed to broadcast order update: {e}")
+    except Exception as exc:
+        logger.warning("Failed to broadcast order update: %s", exc)
