@@ -15,10 +15,11 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class BrokerAccountCreateSerializer(serializers.Serializer):
-    """Used when a user links a new broker account."""
+    """Payload for POST /accounts."""
+    username = serializers.CharField(max_length=150)
     broker_name = serializers.CharField(max_length=100)
     account_id = serializers.CharField(max_length=100)
-    api_key = serializers.CharField(write_only=True, help_text="Plain-text broker API key")
+    api_key = serializers.CharField(write_only=True)
 
 
 class BrokerAccountSerializer(serializers.ModelSerializer):
