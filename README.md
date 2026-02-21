@@ -27,7 +27,7 @@ This project demonstrates a robust, production-ready architecture handling concu
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/trading-signal-backend.git
+   git clone https://github.com/emonhossennn/Trading-signals-via-webhook
    cd trading-signal-backend
    ```
 
@@ -85,7 +85,7 @@ First, register a user and link a mock broker account.
 ### 2. Connect WebSocket (Real-Time Updates)
 Connect a WebSocket client (like Postman or `wscat`) to listen for updates:
 ```
-ws://localhost:8000/ws/orders
+ws://localhost:8000/ws/orders/<your_user_id>
 ```
 
 ### 3. Send a Trading Signal (Webhook)
