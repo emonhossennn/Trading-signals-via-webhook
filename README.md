@@ -4,7 +4,7 @@ A backend service built with **Django** and **Django REST Framework** that recei
 
 This project demonstrates a robust, production-ready architecture handling concurrency, security, and real-time data flow.
 
-## 🚀 Features
+## Features
 
 - **Signal Parsing**: Validates incoming trading signals (regex-based) for BUY/SELL actions, SL/TP logic, and optional entry prices.
 - **Order Lifecycle**: Simulates order execution (Pending → Executed → Closed) using background threads (no heavy Celery dependency needed for this demo).
@@ -15,7 +15,7 @@ This project demonstrates a robust, production-ready architecture handling concu
 - **Audit Logging**: Tracks every signal received, order created, and account action.
 - **REST API**: Clean, documented endpoints for managing accounts and orders.
 
-## 🛠 Tech Stack
+## Tech Stack
 
 - **Python 3.11+**
 - **Django 5.0** & **Django REST Framework**
@@ -23,7 +23,7 @@ This project demonstrates a robust, production-ready architecture handling concu
 - **PostgreSQL** (production-ready config) or SQLite (dev)
 - **Fernet (Cryptography)** for encryption
 
-## 📦 Installation
+## Installation
 
 1. **Clone the repository:**
    ```bash
@@ -60,58 +60,50 @@ This project demonstrates a robust, production-ready architecture handling concu
    ```
    *Note: This runs via ASGI (Daphne) automatically to support WebSockets.*
 
-## 🔌 API Usage
+## API Usage Guide
 
-### 1. Create an Account & Link Broker
-First, register a user and link a mock broker account.
+1.  **Generate your API Key**: First, register your broker account (see API section below). You will receive an `api_key`. **Save this key immediately**, as it is hashed and cannot be recovered.
+2. **Webhook URL**: Your webhook endpoint will be: `http://localhost:8000/webhook/receive-signal/`
+3. **Authentication**: You must include the header `X-API-Key: <your_generated_key>` in every POST request.
+4. **Payload Format**: The service expects a JSON body with a `signal` field containing raw text. Example:
+    ```json
+    { "signal": "BUY EURUSD @1.10 SL 1.09 TP 1.12" }
+    ```
 
-**POST** `/accounts`
-```json
-{
-  "username": "trader1",
-  "broker_name": "MetaTrader 5",
-  "account_id": "12345678",
-  "api_key": "raw-broker-key-to-encrypt"
-}
-```
-**Response:**
-```json
-{
-  "api_key": "YOUR_GENERATED_API_KEY",  <-- SAVE THIS!
-  "user": { ... }
-}
-```
+### 1. Register a Broker Account
+**POST** `/accounts/`
+Register your user and securely store your broker credentials.
+- **Request Body**:
+  ```json
+  {
+    "username": "my_user",
+    "broker_name": "MetaTrader 5",
+    "account_id": "88776655",
+    "api_key": "YOUR_BROKER_SECRET"
+  }
+  ```
+- **Response**: Returns your specific system `api_key` and your `user_id`. Use these for all further interactions.
 
-### 2. Connect WebSocket (Real-Time Updates)
-Connect a WebSocket client (like Postman or `wscat`) to listen for updates:
-```
-ws://localhost:8000/ws/orders/<your_user_id>
-```
+### 2. Receive Trading Signals (Webhook)
+**POST** `/webhook/receive-signal/`
+- **Header**: `X-API-Key: <your_key>`
+- **Body**: `{ "signal": "BUY BTCUSD SL 60000 TP 70000" }`
 
-### 3. Send a Trading Signal (Webhook)
-Simulate a signal coming from TradingView or a bot.
+### 3. List Orders
+**GET** `/orders/`
+- **Header**: `X-API-Key: <your_key>`
+- Returns a list of all orders associated with your account and their current status.
 
-**POST** `/webhook/receive-signal`
-**Headers:** `X-API-Key: YOUR_GENERATED_API_KEY`
-**Body:**
-```json
-{
-  "signal": "BUY EURUSD @1.0850\nSL 1.0820\nTP 1.0900"
-}
-```
+### 4. Get Order Detail
+**GET** `/orders/<order_id>/`
+- **Header**: `X-API-Key: <your_key>`
+- Returns details for a specific order.
 
-**What happens next?**
-1. Service validates the signal.
-2. Creates an order with status `pending`.
-3. **Simulates execution (5s later):** Updates status to `executed`.
-4. **Simulates close (10s later):** Updates status to `closed`.
-5. **Real-time notification:** You'll see JSON messages arriving on the WebSocket for each state change.
+### 5. Real-time Statuses (WebSocket)
+To get live updates on order execution without polling, connect to:
+`ws://localhost:8000/ws/orders/<user_id>`
 
-### 4. Check Analytics
-**GET** `/analytics`
-Returns total trades and breakdown by instrument.
-
-## 🧪 Running Tests
+## Running Tests
 
 Run the comprehensive test suite covering signal parsing, API endpoints, and WebSocket connectivity:
 
@@ -119,8 +111,9 @@ Run the comprehensive test suite covering signal parsing, API endpoints, and Web
 python manage.py test tests/ -v 2
 ```
 
-## Project Structure
-- `signals_app/signal_parser.py` — Core regex parsing logic
-- `signals_app/order_manager.py` — Lifecycle simulation thread
-- `signals_app/consumers.py` — WebSocket handler
-- `signals_app/security.py` — Encryption utilities
+## Internal Project Structure
+- `signals_app/signal_parser.py`: Regex logic for parsing various signal formats.
+- `signals_app/order_manager.py`: Handles background simulation of order lifecycles (Pending -> Executed -> Closed).
+- `signals_app/consumers.py`: Real-time WebSocket communication logic.
+- `signals_app/security.py`: Encryption (Fernet) wrapper for protecting sensitive broker keys.
+- `tests/`: Pytest suite for automated logic verification.

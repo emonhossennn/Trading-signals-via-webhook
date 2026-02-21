@@ -2,9 +2,9 @@
 WebSocket URL routing for the signals_app.
 """
 
-from django.urls import re_path
+from django.urls import path
 from . import consumers
 
 websocket_urlpatterns = [
-    re_path(r"ws/orders", consumers.OrderConsumer.as_asgi()),
+    path("ws/orders/<int:user_id>", consumers.OrderConsumer.as_asgi()),
 ]

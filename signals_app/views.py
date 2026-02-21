@@ -10,7 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .authentication import APIKeyAuthentication
-from .models import BrokerAccount, Order
+from .models import ApiKey, BrokerAccount, Order
 from .serializers import (
     BrokerAccountCreateSerializer,
     BrokerAccountSerializer,
@@ -55,9 +55,10 @@ def create_account(request):
     raw_api_key = secrets.token_urlsafe(32)
     key_hash = hash_api_key(raw_api_key)
 
-    # Store key hash in first_name for lookup — demo simplification;
-    # a production system would use a dedicated APIKey model.
-    user = User.objects.create_user(username=username, password=None, first_name=key_hash)
+    user = User.objects.create_user(username=username, password=None)
+    
+    # Store key hash in dedicated ApiKey model
+    ApiKey.objects.create(user=user, key_hash=key_hash, label="Default Key")
 
     encrypted_key = encrypt_broker_key(serializer.validated_data["api_key"])
     broker_account = BrokerAccount.objects.create(
@@ -78,6 +79,7 @@ def create_account(request):
         "user": {"id": user.id, "username": user.username},
         "broker_account": BrokerAccountSerializer(broker_account).data,
     }, status=status.HTTP_201_CREATED)
+
 
 
 @api_view(["POST"])
@@ -116,13 +118,16 @@ def receive_signal(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    order = create_and_process_order(request.user, broker_account, parsed)
+    # Pass off to the order manager which handles creation and 
+    # broker interaction in a background thread for a "true 200 OK".
+    order_id = create_and_process_order(request.user, broker_account, parsed)
 
     return Response({
-        "message": "Signal received. Order is being processed.",
-        "order_id": str(order.id),
-        "status": order.status,
+        "message": "Signal received. Order is being processed in the background.",
+        "order_id": str(order_id),
+        "status": "pending",
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(["GET"])

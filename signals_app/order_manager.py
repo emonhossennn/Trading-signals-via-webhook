@@ -18,87 +18,105 @@ from .activity_log import log_activity
 logger = logging.getLogger(__name__)
 
 
-def create_and_process_order(user, broker_account, signal: ParsedSignal) -> Order:
+import uuid
+
+def create_and_process_order(user, broker_account, signal: ParsedSignal) -> uuid.UUID:
     """
-    Persist an order, hand it off to the mock broker, then kick off the
-    background lifecycle thread.
-
-    The row is written as 'pending' before the broker call so there is
-    always an audit trail even when execution fails.
+    Generate a UUID immediately and return it, while kicking off
+    the background thread to handle persistence and execution.
     """
-    order = Order.objects.create(
-        user=user,
-        broker_account=broker_account,
-        action=signal.action,
-        instrument=signal.instrument,
-        entry_price=Decimal(str(signal.entry_price)) if signal.entry_price else None,
-        stop_loss=Decimal(str(signal.stop_loss)),
-        take_profit=Decimal(str(signal.take_profit)),
-        status="pending",
-        fake_order_id="",
-    )
-
-    log_activity(user, "order_created", {
-        "order_id": str(order.id),
-        "action": signal.action,
-        "instrument": signal.instrument,
-    })
-
-    try:
-        result = execute_trade(signal, user, broker_account)
-        order.fake_order_id = result.order_id
-        order.save(update_fields=["fake_order_id", "updated_at"])
-        log_activity(user, "order_submitted", {
-            "order_id": str(order.id),
-            "fake_order_id": result.order_id,
-        })
-    except Exception as exc:
-        logger.error("Broker execution failed for order %s: %s", order.id, exc)
-        return order
-
+    order_id = uuid.uuid4()
+    
     thread = threading.Thread(
-        target=_simulate_order_lifecycle,
-        args=(str(order.id), user.id),
+        target=_process_order_in_background,
+        args=(order_id, user.id, broker_account.id, signal),
         daemon=True,
     )
     thread.start()
 
-    return order
+    return order_id
 
 
-def _simulate_order_lifecycle(order_id: str, user_id: int):
+def _process_order_in_background(order_id: uuid.UUID, user_id: int, broker_account_id: uuid.UUID, signal: ParsedSignal):
     """
-    Background thread: pending -> executed (after 5 s) -> closed (after 10 s).
-    Each transition is broadcast to the user's WebSocket group.
+    Background worker:
+    1. Persist the order.
+    2. Call the mock broker.
+    3. Run the lifecycle simulation.
     """
-    from .models import Order
+    from .models import Order, BrokerAccount
     from .activity_log import log_activity
     from django.contrib.auth.models import User
-
+    
     try:
         user = User.objects.get(id=user_id)
+        broker_account = BrokerAccount.objects.get(id=broker_account_id)
+        
+        # 1. Persist
+        order = Order.objects.create(
+            id=order_id,
+            user=user,
+            broker_account=broker_account,
+            action=signal.action,
+            instrument=signal.instrument,
+            entry_price=Decimal(str(signal.entry_price)) if signal.entry_price else None,
+            stop_loss=Decimal(str(signal.stop_loss)),
+            take_profit=Decimal(str(signal.take_profit)),
+            status="pending",
+        )
+        
+        log_activity(user, "order_created", {
+            "order_id": str(order.id),
+            "action": signal.action,
+            "instrument": signal.instrument,
+        })
+        
+        # 2. Broker Execution
+        try:
+            result = execute_trade(signal, user, broker_account)
+            order.fake_order_id = result.order_id
+            order.save(update_fields=["fake_order_id", "updated_at"])
+            log_activity(user, "order_submitted", {
+                "order_id": str(order.id),
+                "fake_order_id": result.order_id,
+            })
+        except Exception as exc:
+            logger.error("Broker execution failed for order %s: %s", order.id, exc)
+            # Order remains in 'pending' or we could mark as 'failed'
+            return
 
+        # 3. Lifecycle Simulation
+        _simulate_order_lifecycle(order, user)
+        
+    except Exception as exc:
+        logger.error("Background order processing failed for %s: %s", order_id, exc)
+
+
+def _simulate_order_lifecycle(order: Order, user: User):
+    """
+    Background simulation: pending -> executed -> closed.
+    """
+    try:
         time.sleep(5)
-        order = Order.objects.get(id=order_id)
         order.status = "executed"
         order.save(update_fields=["status", "updated_at"])
-        log_activity(user, "order_executed", {"order_id": order_id, "instrument": order.instrument})
+        log_activity(user, "order_executed", {"order_id": str(order.id), "instrument": order.instrument})
         _broadcast_order_update(order, "order.executed")
-        logger.info("Order %s -> executed", order_id)
+        logger.info("Order %s -> executed", order.id)
 
         time.sleep(10)
         order.refresh_from_db()
         order.status = "closed"
         order.save(update_fields=["status", "updated_at"])
-        log_activity(user, "order_closed", {"order_id": order_id, "instrument": order.instrument})
+        log_activity(user, "order_closed", {"order_id": str(order.id), "instrument": order.instrument})
         _broadcast_order_update(order, "order.closed")
-        logger.info("Order %s -> closed", order_id)
+        logger.info("Order %s -> closed", order.id)
 
     except Exception as exc:
-        logger.error("Lifecycle simulation failed for order %s: %s", order_id, exc)
-
+        logger.error("Lifecycle simulation failed for order %s: %s", order.id, exc)
 
 def _broadcast_order_update(order, event_type: str):
+
     """Push an order status change to the user's WebSocket group."""
     try:
         from channels.layers import get_channel_layer

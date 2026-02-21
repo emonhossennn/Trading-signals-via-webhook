@@ -67,7 +67,27 @@ class Order(models.Model):
         return f"{self.action} {self.instrument} [{self.status}]"
 
 
+
+class ApiKey(models.Model):
+    """
+    Stores hashed API keys for authenticated access.
+    A user can have multiple API keys.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys")
+    key_hash = models.CharField(max_length=128, db_index=True, help_text="Hashed version of the raw API key")
+    label = models.CharField(max_length=100, blank=True, help_text="Friendly name for the key")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.label or 'Key'} for {self.user.username}"
+
+
 class ActivityLog(models.Model):
+
     """
     Tracks user activity and important system events for auditing.
     """
